@@ -1,0 +1,239 @@
+# Board: Generic ESP32 Board (Generic)
+# Definition: definitions/boards/generic-esp32/manifest.yaml
+
+esphome:
+  name: lcd-temperatyra
+  friendly_name: LCD_temperatyra
+
+esp32:
+  board: esp32dev
+  framework:
+    type: arduino
+
+logger:
+  level: INFO
+
+api:
+  encryption:
+    key: !secret api_key
+ota:
+  - platform: esphome
+    encryption:
+
+wifi:
+  networks:
+    - ssid: !secret wifi_ssid
+      password: !secret wifi_password
+    - ssid: !secret wifi_ssid_u
+      password: !secret wifi_password_u
+    - ssid: !secret wifi_ssid_k
+      password: !secret wifi_password_k
+
+  ap:
+    ssid: NTC_LCD
+    password: !secret ap_password
+    
+  manual_ip:
+    static_ip: 192.168.0.47
+    gateway: 192.168.0.1
+    subnet: 255.255.255.0
+    dns1: 192.168.0.1
+    dns2: 8.8.8.8
+
+captive_portal:
+web_server:
+
+i2c:
+  sda: GPIO21
+  scl: GPIO22
+
+time:
+  - platform: sntp
+    id: my_time
+    timezone: "EET-2EEST,M3.5.0/3,M10.5.0/4"
+
+display:
+  - platform: lcd_pcf8574
+    dimensions: 20x4
+    address: 0x27
+    id: lcd_screen
+    update_interval: 1s
+    lambda: |-
+      static uint32_t ip_received_time = 0;
+
+      // 1. Устройство успешно подключилось к Wi-Fi роутеру
+      if (wifi::global_wifi_component->is_connected()) {
+        if (ip_received_time == 0) {
+          ip_received_time = millis(); // Запоминаем время подключения
+        }
+
+        // Показываем IP первые 5 секунд после подключения
+        if (millis() - ip_received_time < 5000) {
+          it.print(0, 0, "WiFi Connected!     ");
+          it.print(0, 1, "IP Address:         ");
+          if (id(wifi_ip).has_state()) {
+            it.printf(0, 2, "%-20s", id(wifi_ip).state.c_str());
+          } else {
+            it.print(0, 2, "Getting IP...       ");
+          }
+          it.print(0, 3, "                    ");
+        } 
+        else {
+          // --- Основной экран (Время и датчики) ---
+          auto current_time = id(my_time).now();
+          if (current_time.is_valid()) {
+            it.strftime(0, 0, "Time: %H:%M:%S     ", current_time);
+            it.strftime(0, 1, "Data: %d-%m-%Y     ", current_time);
+          } else {
+            it.print(0, 0, "Time: Syncing...    ");
+            it.print(0, 1, "Data: Syncing...    ");
+          }
+
+          it.print(0, 2, "Kotel:       ");
+          if (id(boiler_supply).has_state() && !std::isnan(id(boiler_supply).state)) {
+            it.printf(13, 2, "%4.1f C", id(boiler_supply).state);
+          } else {
+            it.print(13, 2, "--- C ");
+          }
+
+          it.print(0, 3, "Kotelna:     ");
+          if (id(boiler_room).has_state() && !std::isnan(id(boiler_room).state)) {
+            it.printf(13, 3, "%4.1f C", id(boiler_room).state);
+          } else {
+            it.print(13, 3, "--- C ");
+          }
+        }
+      }
+      // 2. Если к роутеру не подключилось и активна Точка Доступа платы (AP)
+      else if (wifi::global_wifi_component->is_ap_active()) {
+        it.print(0, 0, "WiFi: Failed!       ");
+        it.print(0, 1, "Hotspot AP Active   ");
+        it.print(0, 2, "IP: 192.168.4.1     ");
+        it.print(0, 3, "                    ");
+        ip_received_time = 0; 
+      }
+      // 3. Статус загрузки (плата только включилась)
+      else {
+        it.print(0, 0, "Booting...          ");
+        it.print(0, 1, "Connecting to WiFi. ");
+        it.print(0, 2, "Please wait...      ");
+        it.print(0, 3, "                    ");
+        ip_received_time = 0;
+      }
+
+
+
+one_wire:
+  - platform: gpio
+    pin: GPIO25
+    id: bus_boiler
+  - platform: gpio
+    pin: GPIO18
+    id: hub_1wire_room
+    
+
+    
+sensor:
+  - platform: dallas_temp
+    one_wire_id: bus_boiler
+    #index: 0 
+    address: 0x2400000025ee8328
+    unit_of_measurement: "°C"
+    name: "Котел Подача"
+    id: boiler_supply
+    resolution: 12  
+    update_interval: 10s
+    filters:
+      - calibrate_linear:
+          datapoints:
+            - 0.2 -> 0.0
+            - 12.2 -> 20.0
+            - 34.6 -> 40.0
+            - 57.6 -> 60.0
+            - 78.5 -> 80.0
+            - 99.6 -> 99.8
+          method: least_squares
+
+  - platform: dallas_temp
+    one_wire_id: bus_boiler
+    #index: 1 
+    address: 0xd51abf00874d3728
+    unit_of_measurement: "°C"
+    name: "Котел Обратка"
+    id: boiler_sensor_or
+    update_interval: 10s  
+    resolution: 12
+    filters:
+      - calibrate_linear:
+          method: least_squares
+          datapoints:
+            - 0.8 -> 0.0
+            - 12.2 -> 20.0
+            - 34.1 -> 40.0
+            - 56.4 -> 60.0
+            - 76.8 -> 80.0
+            - 98.6 -> 99.8
+
+  - platform: dallas_temp
+    one_wire_id: hub_1wire_room
+    #index: 0
+    address: 0xc53eae0087e75628
+    unit_of_measurement: "°C"
+    name: "В помещении"
+    id: boiler_room
+    update_interval: 10s 
+    resolution: 12
+    filters:
+      - calibrate_linear:
+          method: least_squares
+          datapoints:
+            - 0.9 -> 0.0
+            - 21.2 -> 20.0
+    #        - 41.8 -> 40.0
+    #        - 62.1 -> 60.0
+    #        - 82.5 -> 80.0
+ 
+  - platform: wifi_signal
+    name: "WiFi Signal dB"
+    id: wifi_signal_db
+    update_interval: 60s
+    entity_category: "diagnostic"
+
+  - platform: copy
+    source_id: wifi_signal_db
+    name: "WiFi Signal Percent"
+    filters:
+      - lambda: return min(max(2 * (x + 100.0), 0.0), 100.0);
+    unit_of_measurement: "%"
+    entity_category: "diagnostic"
+    
+  - platform: uptime
+    id: uptime_seconds
+    
+button:    
+  - platform: restart
+    name: "Restart"  
+    
+binary_sensor:
+  - platform: status
+    name: "Online"
+
+text_sensor:
+  - platform: wifi_info
+    ip_address:
+      name: IP Address
+      id: wifi_ip
+      icon: "mdi:alert"
+    ssid:
+      name: SSID
+      id: my_ssid
+      icon: "mdi:access-point"
+  - platform: version
+    name: "Version"
+    hide_timestamp: true
+    hide_hash: true
+  - platform: uptime
+    name: Uptime
+    format:
+      separator: " "
+      days: "D"
