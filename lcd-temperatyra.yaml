@@ -1,17 +1,13 @@
-# Board: Generic ESP32 Board (Generic)
-# Definition: definitions/boards/generic-esp32/manifest.yaml
-
 esphome:
-  name: lcd-temperatyra
-  friendly_name: LCD_temperatyra
+  name: twst
+  friendly_name: twst
 
 esp32:
   board: esp32dev
   framework:
-    type: arduino
+    type: esp-idf
 
 logger:
-  level: INFO
 
 api:
   encryption:
@@ -60,14 +56,31 @@ display:
     update_interval: 1s
     lambda: |-
       static uint32_t ip_received_time = 0;
+      static bool was_connected = false;
 
-      // 1. Устройство успешно подключилось к Wi-Fi роутеру
+      // --- 1. КРИТИЧНИЙ ЗАХИСТ: Перевірка перегріву котла (Пріоритет №1) ---
+      if (id(boiler_overheat).state) {
+        if ((millis() / 1000) % 2 == 0) {
+          it.print(0, 0, "!!!!!!!!!!!!!!!!!!!!");
+          it.print(0, 1, "!!  CRITICAL ERROR!!");
+          it.printf(0, 2, "!! OVERHEAT: %4.1fC !!", id(boiler_supply).state);
+          it.print(0, 3, "!!!!!!!!!!!!!!!!!!!!");
+        } else {
+          it.print(0, 0, "                    ");
+          it.print(0, 1, "    BOILER HOT!     ");
+          it.printf(0, 2, "     TEMP: %4.1fC   ", id(boiler_supply).state);
+          it.print(0, 3, "                    ");
+        }
+        return; 
+      }
+
+      // --- 2. Стандартна логіка відображення ---
       if (wifi::global_wifi_component->is_connected()) {
-        if (ip_received_time == 0) {
-          ip_received_time = millis(); // Запоминаем время подключения
+        if (!was_connected) {
+          ip_received_time = millis(); 
+          was_connected = true;
         }
 
-        // Показываем IP первые 5 секунд после подключения
         if (millis() - ip_received_time < 5000) {
           it.print(0, 0, "WiFi Connected!     ");
           it.print(0, 1, "IP Address:         ");
@@ -79,23 +92,45 @@ display:
           it.print(0, 3, "                    ");
         } 
         else {
-          // --- Основной экран (Время и датчики) ---
+          // --- Оптимізований робочий екран 20x4 ---
           auto current_time = id(my_time).now();
+          
           if (current_time.is_valid()) {
-            it.strftime(0, 0, "Time: %H:%M:%S     ", current_time);
-            it.strftime(0, 1, "Data: %d-%m-%Y     ", current_time);
+            // Чергування Часу та Дати кожні 5 секунд у рядку 0 (символи 0-14)
+            if ((millis() / 5000) % 2 == 0) {
+              it.strftime(0, 0, "Time: %H:%M:%S ", current_time);
+            } else {
+              it.strftime(0, 0, "Date: %d-%m-%y ", current_time);
+            }
           } else {
-            it.print(0, 0, "Time: Syncing...    ");
-            it.print(0, 1, "Data: Syncing...    ");
+            it.print(0, 0, "Syncing...     ");
           }
 
-          it.print(0, 2, "Kotel:       ");
+          // Рівень Wi-Fi у верхньому правому кутку (символи 15-20)
+          if (id(wifi_signal_db).has_state()) {
+            int pct = min(max(2 * (int(id(wifi_signal_db).state) + 100), 0), 100);
+            it.printf(15, 0, "W:%3d%%", pct);
+          } else {
+            it.print(15, 0, "W:---%");
+          }
+
+          // Рядок 1: Подача котла
+          it.print(0, 1, "Podacha:     ");
           if (id(boiler_supply).has_state() && !std::isnan(id(boiler_supply).state)) {
-            it.printf(13, 2, "%4.1f C", id(boiler_supply).state);
+            it.printf(13, 1, "%4.1f C", id(boiler_supply).state);
+          } else {
+            it.print(13, 1, "--- C ");
+          }
+
+          // Рядок 2: Обратка котла
+          it.print(0, 2, "Obratka:     ");
+          if (id(boiler_sensor_or).has_state() && !std::isnan(id(boiler_sensor_or).state)) {
+            it.printf(13, 2, "%4.1f C", id(boiler_sensor_or).state);
           } else {
             it.print(13, 2, "--- C ");
           }
 
+          // Рядок 3: Температура котельні
           it.print(0, 3, "Kotelna:     ");
           if (id(boiler_room).has_state() && !std::isnan(id(boiler_room).state)) {
             it.printf(13, 3, "%4.1f C", id(boiler_room).state);
@@ -104,23 +139,20 @@ display:
           }
         }
       }
-      // 2. Если к роутеру не подключилось и активна Точка Доступа платы (AP)
       else if (wifi::global_wifi_component->is_ap_active()) {
         it.print(0, 0, "WiFi: Failed!       ");
         it.print(0, 1, "Hotspot AP Active   ");
         it.print(0, 2, "IP: 192.168.4.1     ");
         it.print(0, 3, "                    ");
-        ip_received_time = 0; 
+        was_connected = false; 
       }
-      // 3. Статус загрузки (плата только включилась)
       else {
         it.print(0, 0, "Booting...          ");
         it.print(0, 1, "Connecting to WiFi. ");
         it.print(0, 2, "Please wait...      ");
         it.print(0, 3, "                    ");
-        ip_received_time = 0;
+        was_connected = false;
       }
-
 
 
 one_wire:
@@ -130,13 +162,31 @@ one_wire:
   - platform: gpio
     pin: GPIO18
     id: hub_1wire_room
-    
 
     
 sensor:
+  #- platform: dallas_temp
+  #  one_wire_id: bus_boiler
+  #  #index: 0 
+  #  address: 0x2400000025ee8328
+  #  unit_of_measurement: "°C"
+  #  name: "Котел Подача"
+  #  id: boiler_supply
+  #  resolution: 12  
+  #  update_interval: 10s
+  #  filters:
+  #    - calibrate_linear:
+  #        datapoints:
+  #          - 0.2 -> 0.0
+  #          - 18.0 -> 20.0
+  #          - 38.4 -> 40.0
+  #          - 58.6 -> 60.0
+  #          - 78.5 -> 80.0
+  #          - 99.6 -> 99.8
+  #        method: exact
+
   - platform: dallas_temp
     one_wire_id: bus_boiler
-    #index: 0 
     address: 0x2400000025ee8328
     unit_of_measurement: "°C"
     name: "Котел Подача"
@@ -144,15 +194,32 @@ sensor:
     resolution: 12  
     update_interval: 10s
     filters:
+      # 1. Відсікаємо стандартні коди помилок датчика (до калібрування!)
+      - filter_out: 85.0
+      - filter_out: -127.0
+      
+      # 2. Ігноруємо неможливі для котла значення (залишаємо попереднє валідне або відкидаємо)
+      - lambda: |-
+          if (x < -10.0 || x > 115.0) return {};
+          return x;
+
+      # 3. Медіанний фільтр: бере середнє значення з 3 останніх вимірів (відсікає одиничні стрибки)
+      - median:
+          window_size: 3
+          send_every: 1
+          send_first_at: 1
+
+      # 4. Калібрування (виконується вже на очищених даних)
       - calibrate_linear:
+          method: exact
           datapoints:
             - 0.2 -> 0.0
-            - 12.2 -> 20.0
-            - 34.6 -> 40.0
-            - 57.6 -> 60.0
+            - 19.0 -> 20.0
+            - 38.4 -> 40.0
+            - 58.6 -> 60.0
             - 78.5 -> 80.0
             - 99.6 -> 99.8
-          method: least_squares
+
 
   - platform: dallas_temp
     one_wire_id: bus_boiler
@@ -167,11 +234,12 @@ sensor:
       - calibrate_linear:
           method: least_squares
           datapoints:
+            # чем меньше первое значение тем ближе ко второму значению
             - 0.8 -> 0.0
-            - 12.2 -> 20.0
-            - 34.1 -> 40.0
-            - 56.4 -> 60.0
-            - 76.8 -> 80.0
+            - 17.2 -> 20.0
+            - 38.1 -> 40.0
+            - 58.4 -> 60.0
+            - 78.8 -> 80.0
             - 98.6 -> 99.8
 
   - platform: dallas_temp
@@ -187,9 +255,9 @@ sensor:
       - calibrate_linear:
           method: least_squares
           datapoints:
-            - 0.9 -> 0.0
-            - 21.2 -> 20.0
-    #        - 41.8 -> 40.0
+            - 0.2 -> 0.0
+            - 18.3 -> 20.0
+            - 38.8 -> 40.0
     #        - 62.1 -> 60.0
     #        - 82.5 -> 80.0
  
@@ -218,6 +286,18 @@ binary_sensor:
   - platform: status
     name: "Online"
 
+  - platform: template
+    name: "Перегрев Котла Авария"
+    id: boiler_overheat
+    device_class: problem
+    lambda: |-
+      if (id(boiler_supply).has_state() && !std::isnan(id(boiler_supply).state)) {
+        if (id(boiler_supply).state >= 85.0) {
+          return true;  
+        }
+      }
+      return false; 
+
 text_sensor:
   - platform: wifi_info
     ip_address:
@@ -236,4 +316,6 @@ text_sensor:
     name: Uptime
     format:
       separator: " "
-      days: "D"
+      days: D
+      hours: h
+      minutes: m
