@@ -194,22 +194,15 @@ sensor:
     resolution: 12  
     update_interval: 10s
     filters:
-      # 1. Відсікаємо стандартні коди помилок датчика (до калібрування!)
       - filter_out: 85.0
       - filter_out: -127.0
-      
-      # 2. Ігноруємо неможливі для котла значення (залишаємо попереднє валідне або відкидаємо)
       - lambda: |-
           if (x < -10.0 || x > 115.0) return {};
           return x;
-
-      # 3. Медіанний фільтр: бере середнє значення з 3 останніх вимірів (відсікає одиничні стрибки)
       - median:
           window_size: 3
           send_every: 1
           send_first_at: 1
-
-      # 4. Калібрування (виконується вже на очищених даних)
       - calibrate_linear:
           method: exact
           datapoints:
@@ -219,11 +212,11 @@ sensor:
             - 58.6 -> 60.0
             - 78.5 -> 80.0
             - 99.6 -> 99.8
-
+      # Если 45 секунд нет валидных данных — переводим в Unavailable (NaN)
+      - timeout: 45s
 
   - platform: dallas_temp
     one_wire_id: bus_boiler
-    #index: 1 
     address: 0xd51abf00874d3728
     unit_of_measurement: "°C"
     name: "Котел Обратка"
@@ -231,20 +224,28 @@ sensor:
     update_interval: 10s  
     resolution: 12
     filters:
+      - filter_out: 85.0
+      - filter_out: -127.0
+      - lambda: |-
+          if (x < -10.0 || x > 115.0) return {};
+          return x;
+      - median:
+          window_size: 3
+          send_every: 1
+          send_first_at: 1
       - calibrate_linear:
-          method: least_squares
+          method: exact
           datapoints:
-            # чем меньше первое значение тем ближе ко второму значению
             - 0.8 -> 0.0
             - 17.2 -> 20.0
             - 38.1 -> 40.0
             - 58.4 -> 60.0
             - 78.8 -> 80.0
             - 98.6 -> 99.8
+      - timeout: 45s
 
   - platform: dallas_temp
     one_wire_id: hub_1wire_room
-    #index: 0
     address: 0xc53eae0087e75628
     unit_of_measurement: "°C"
     name: "В помещении"
@@ -252,14 +253,23 @@ sensor:
     update_interval: 10s 
     resolution: 12
     filters:
+      - filter_out: 85.0
+      - filter_out: -127.0
+      - lambda: |-
+          if (x < -20.0 || x > 60.0) return {};
+          return x;
+      - median:
+          window_size: 3
+          send_every: 1
+          send_first_at: 1
       - calibrate_linear:
-          method: least_squares
+          method: exact
           datapoints:
             - 0.2 -> 0.0
             - 18.3 -> 20.0
             - 38.8 -> 40.0
-    #        - 62.1 -> 60.0
-    #        - 82.5 -> 80.0
+      - timeout: 45s
+
  
   - platform: wifi_signal
     name: "WiFi Signal dB"
