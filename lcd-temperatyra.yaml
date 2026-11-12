@@ -301,12 +301,17 @@ binary_sensor:
     id: boiler_overheat
     device_class: problem
     lambda: |-
+      static bool alarm_state = false;
       if (id(boiler_supply).has_state() && !std::isnan(id(boiler_supply).state)) {
-        if (id(boiler_supply).state >= 85.0) {
-          return true;  
+        float temp = id(boiler_supply).state;
+        if (temp >= 84.5) {
+          alarm_state = true;
+        } else if (temp <= 81.5) {
+          alarm_state = false;
         }
       }
-      return false; 
+      return alarm_state;
+
 
 text_sensor:
   - platform: wifi_info
